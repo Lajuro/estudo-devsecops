@@ -20,8 +20,9 @@ jobs:
         run: echo "$GITHUB_CONTEXT"
 
       - name: Execução Condicional
-        if: github.event_name == 'push'
-        run: echo "Este passo roda apenas em pushes, não em pull requests."
+        # Evita rodar para commits de "Merge pull request" (mesclagens via PR)
+        if: github.event_name == 'push' && !contains(github.event.head_commit.message || '', 'Merge pull request')
+        run: echo "Este passo roda apenas em pushes diretos, não em merges de pull requests."
   verificacao_ambiente:
     runs-on: ubuntu-latest
     steps:
