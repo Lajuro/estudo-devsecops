@@ -1,6 +1,9 @@
 name: Inicialização do Sistema
 run-name: ${{ github.error }} está testando Actions 🚀
 
+env:
+  AMBIENTE_ALVO: Producao
+
 # Gatilhos de Evento
 on:
   push:
@@ -8,6 +11,17 @@ on:
   workflow_dispatch: # Permite execução manual via UI
 
 jobs:
+  analise-contextual:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dump do Contexto GitHub
+        env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
+        run: echo "$GITHUB_CONTEXT"
+
+      - name: Execução Condicional
+        if: github.event_name == 'push'
+        run: echo "Este passo roda apenas em pushes, não em pull requests."
   verificacao_ambiente:
     runs-on: ubuntu-latest
     steps:
