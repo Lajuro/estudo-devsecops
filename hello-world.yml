@@ -1,0 +1,23 @@
+name: Inicialização do Sistema
+run-name: ${{ github.error }} está testando Actions 🚀
+
+# Gatilhos de Evento
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: # Permite execução manual via UI
+
+jobs:
+  verificacao_ambiente:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do Código
+        uses: actions/checkout@v4
+        # A ação do checkout é fundamental; sem ela, o runner é uma caixa vazia.
+        # Ela baixa seu código para o diretório de trabalho do runner.
+      - name: Inspeção do Sistema
+        run: |
+          echo "Sistema Operacional: $(uname -a)"
+          echo "Node Version: $(node -v)"
+          echo "Diretório Atual: $(pwd)"
+          ls -la
