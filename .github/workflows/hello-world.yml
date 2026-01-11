@@ -42,23 +42,22 @@ jobs:
           echo "Listando arquivos excluindo padrões (suporta .listignore ou .gitignore)..."
           if [ -f .listignore ]; then
             echo ".listignore encontrado, usando-o para excluir padrões"
-            python3 - <<'PY'
-import fnmatch,os
-patterns=[l.strip() for l in open('.listignore') if l.strip() and not l.strip().startswith('#')]
-for root,dirs,files in os.walk('.'):
-    # gerencia caminhos relativos
-    for name in files:
-        rel=os.path.relpath(os.path.join(root,name),'.')
-        if rel=='.':
-            continue
-        skip=False
-        for p in patterns:
-            if fnmatch.fnmatch(rel,p) or fnmatch.fnmatch(os.path.join('/',rel),p):
-                skip=True
-                break
-        if not skip:
-            print(rel)
-PY
+            python3 << 'PY'
+          import fnmatch,os
+          patterns=[l.strip() for l in open('.listignore') if l.strip() and not l.strip().startswith('#')]
+          for root,dirs,files in os.walk('.'):
+              for name in files:
+                  rel=os.path.relpath(os.path.join(root,name),'.')
+                  if rel=='.':
+                      continue
+                  skip=False
+                  for p in patterns:
+                      if fnmatch.fnmatch(rel,p) or fnmatch.fnmatch(os.path.join('/',rel),p):
+                          skip=True
+                          break
+                  if not skip:
+                      print(rel)
+          PY
           elif [ -d .git ]; then
             echo ".git encontrado, usando git ls-files para respeitar .gitignore"
             git ls-files -z --cached --others --exclude-standard | xargs -0 -n1
