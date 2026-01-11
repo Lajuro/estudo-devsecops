@@ -1,5 +1,5 @@
 name: Inicialização do Sistema
-run-name: ${{ github.error }} está testando Actions 🚀
+run-name: ${{ github.actor }} está testando Actions 🚀
 
 env:
   AMBIENTE_ALVO: Producao
