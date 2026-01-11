@@ -1,0 +1,16 @@
+{
+  "name": "nodejs-sonarqube-demo",
+  "version": "1.0.0",
+  "description": "API Express com erros propositais para testar SonarQube",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "node app.js"
+  },
+  "keywords": ["express", "sonarqube", "demo"],
+  "author": "DevSecOps Study",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}
