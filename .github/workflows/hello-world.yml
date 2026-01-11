@@ -35,4 +35,5 @@ jobs:
           echo "Sistema Operacional: $(uname -a)"
           echo "Node Version: $(node -v)"
           echo "Diretório Atual: $(pwd)"
-          ls -la
+          echo "Listando todos os arquivos e diretórios recursivamente:"
+          ls -laR
