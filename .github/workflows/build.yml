@@ -29,6 +29,7 @@ jobs:
         with:
           script: |
             const fs = require('fs');
+            const http = require('http');
             const https = require('https');
             
             // Configurações
@@ -36,66 +37,93 @@ jobs:
             const sonarUrl = process.env.SONAR_HOST_URL || 'http://localhost:9000';
             const projectKey = process.env.SONAR_PROJECT_KEY || 'nodejs-devsecops';
             
-            // Função para fazer requisições ao SonarQube
+            console.log(`🔍 Conectando ao SonarQube: ${sonarUrl}`);
+            console.log(`📦 Projeto: ${projectKey}`);
+            
+            // Função para fazer requisições ao SonarQube (HTTP/HTTPS)
             function fetchSonarData(endpoint) {
               return new Promise((resolve, reject) => {
-                const auth = Buffer.from(`${sonarToken}:`).toString('base64');
-                const url = new URL(endpoint, sonarUrl);
-                
-                const options = {
-                  hostname: url.hostname,
-                  port: url.port,
-                  path: url.pathname + url.search,
-                  method: 'GET',
-                  headers: {
-                    'Authorization': `Basic ${auth}`,
-                    'Accept': 'application/json'
-                  }
-                };
-                
-                const req = https.request(options, (res) => {
-                  let data = '';
-                  res.on('data', chunk => data += chunk);
-                  res.on('end', () => {
-                    try {
-                      resolve(JSON.parse(data));
-                    } catch (e) {
-                      reject(e);
+                try {
+                  const auth = Buffer.from(`${sonarToken}:`).toString('base64');
+                  const url = new URL(endpoint, sonarUrl);
+                  const protocol = url.protocol === 'https:' ? https : http;
+                  
+                  const options = {
+                    hostname: url.hostname,
+                    port: url.port || (url.protocol === 'https:' ? 443 : 80),
+                    path: url.pathname + url.search,
+                    method: 'GET',
+                    headers: {
+                      'Authorization': `Basic ${auth}`,
+                      'Accept': 'application/json'
                     }
+                  };
+                  
+                  const req = protocol.request(options, (res) => {
+                    let data = '';
+                    res.on('data', chunk => data += chunk);
+                    res.on('end', () => {
+                      try {
+                        const json = JSON.parse(data);
+                        console.log(`✅ Resposta recebida (status ${res.statusCode})`);
+                        resolve(json);
+                      } catch (e) {
+                        console.error(`❌ Erro ao parsear JSON:`, e.message);
+                        console.error(`Resposta recebida:`, data.substring(0, 500));
+                        reject(e);
+                      }
+                    });
                   });
-                });
-                
-                req.on('error', reject);
-                req.end();
+                  
+                  req.on('error', (err) => {
+                    console.error(`❌ Erro na requisição:`, err.message);
+                    reject(err);
+                  });
+                  
+                  req.end();
+                } catch (e) {
+                  console.error(`❌ Erro ao criar requisição:`, e.message);
+                  reject(e);
+                }
               });
             }
             
             try {
               // Buscar informações do projeto
+              console.log(`📊 Buscando métricas do projeto...`);
               const projectMetrics = await fetchSonarData(`/api/measures/component?component=${projectKey}&metricKeys=bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,security_rating,reliability_rating,maintainability_rating`);
               
-              const measures = projectMetrics.component.measures.reduce((acc, m) => {
+              if (!projectMetrics.component) {
+                throw new Error(`Projeto "${projectKey}" não encontrado no SonarQube`);
+              }
+              
+              const measures = (projectMetrics.component.measures || []).reduce((acc, m) => {
                 acc[m.metric] = m.value;
                 return acc;
               }, {});
               
               // Buscar issues
-              const issues = await fetchSonarData(`/api/issues/search?componentKeys=${projectKey}&types=BUG,VULNERABILITY,CODE_SMELL&ps=50`);
+              console.log(`🔍 Buscando issues do projeto...`);
+              const issuesResponse = await fetchSonarData(`/api/issues/search?componentKeys=${projectKey}&types=BUG,VULNERABILITY,CODE_SMELL&ps=100`);
+              
+              const issues = issuesResponse.issues || [];
+              console.log(`✅ ${issues.length} issues encontradas`);
               
               // Contar issues por tipo
-              const bugCount = issues.issues.filter(i => i.type === 'BUG').length;
-              const vulnCount = issues.issues.filter(i => i.type === 'VULNERABILITY').length;
-              const smellCount = issues.issues.filter(i => i.type === 'CODE_SMELL').length;
+              const bugCount = issues.filter(i => i.type === 'BUG').length;
+              const vulnCount = issues.filter(i => i.type === 'VULNERABILITY').length;
+              const smellCount = issues.filter(i => i.type === 'CODE_SMELL').length;
               
               // Contar por severidade
-              const severities = issues.issues.reduce((acc, i) => {
+              const severities = issues.reduce((acc, i) => {
                 acc[i.severity] = (acc[i.severity] || 0) + 1;
                 return acc;
               }, {});
               
               // Gerar markdown report
               let report = `# 📋 Relatório de Análise SonarQube\n\n`;
-              report += `**Data:** ${new Date().toLocaleString('pt-BR')}\n\n`;
+              report += `**Data:** ${new Date().toLocaleString('pt-BR')}\n`;
+              report += `**Projeto:** ${projectKey}\n\n`;
               
               // Status geral
               report += `## 📊 Métricas Gerais\n\n`;
@@ -112,7 +140,7 @@ jobs:
               
               // Resumo de issues
               report += `## 🔍 Resumo de Issues\n\n`;
-              report += `- **Total de Issues:** ${issues.issues.length}\n`;
+              report += `- **Total de Issues:** ${issues.length}\n`;
               report += `- **Bugs:** ${bugCount}\n`;
               report += `- **Vulnerabilidades:** ${vulnCount}\n`;
               report += `- **Code Smells:** ${smellCount}\n\n`;
@@ -129,9 +157,9 @@ jobs:
               }
               
               // Top 10 issues mais graves
-              if (issues.issues.length > 0) {
+              if (issues.length > 0) {
                 report += `## ⚠️ Issues Mais Graves\n\n`;
-                const sorted = issues.issues
+                const sorted = issues
                   .sort((a, b) => {
                     const severityOrder = { BLOCKER: 0, CRITICAL: 1, MAJOR: 2, MINOR: 3, INFO: 4 };
                     return severityOrder[a.severity] - severityOrder[b.severity];
@@ -146,13 +174,18 @@ jobs:
                   const typeIcon = issue.type === 'BUG' ? '🐛' : 
                                    issue.type === 'VULNERABILITY' ? '🔒' : '💡';
                   
+                  const fileName = issue.component ? issue.component.split(':').pop() : 'Desconhecido';
+                  
                   report += `\n### ${idx + 1}. ${icon} ${typeIcon} ${issue.message}\n`;
-                  report += `- **Arquivo:** \`${issue.component.split(':').pop()}\`\n`;
-                  report += `- **Linha:** ${issue.line}\n`;
+                  report += `- **Arquivo:** \`${fileName}\`\n`;
+                  if (issue.line) report += `- **Linha:** ${issue.line}\n`;
                   report += `- **Severidade:** ${issue.severity}\n`;
                   report += `- **Status:** ${issue.status}\n`;
                 });
                 report += '\n';
+              } else {
+                report += `## ✅ Nenhuma Issue Encontrada\n\n`;
+                report += `Excelente! Seu código não possui bugs, vulnerabilidades ou code smells críticos.\n\n`;
               }
               
               // Links úteis
@@ -172,6 +205,9 @@ jobs:
               if (smellCount > 0) {
                 report += `✨ **Melhorias:** ${smellCount} code smell(s) encontrado(s). Considere refatorar para melhor qualidade do código.\n\n`;
               }
+              if (vulnCount === 0 && bugCount === 0 && smellCount === 0) {
+                report += `✨ **Parabéns!** Seu código está em excelente estado.\n\n`;
+              }
               
               // Escrever no arquivo de summary
               fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, report);
@@ -179,6 +215,21 @@ jobs:
               console.log('✅ Relatório gerado com sucesso!');
             } catch (error) {
               console.error('❌ Erro ao gerar relatório:', error.message);
+              
+              // Escrever um relatório de erro
+              let errorReport = `# ❌ Erro ao Gerar Relatório SonarQube\n\n`;
+              errorReport += `**Erro:** ${error.message}\n\n`;
+              errorReport += `### 🔧 Verificações Necessárias\n\n`;
+              errorReport += `1. Certifique-se que \`SONAR_TOKEN\` está configurado nos secrets\n`;
+              errorReport += `2. Verifique se \`SONAR_HOST_URL\` está configurado (ex: \`http://localhost:9000\`)\n`;
+              errorReport += `3. Confirme que a análise SonarQube foi executada corretamente\n`;
+              errorReport += `4. Valide que o \`SONAR_PROJECT_KEY\` está correto\n\n`;
+              errorReport += `**URL do SonarQube:** ${process.env.SONAR_HOST_URL || 'não configurado'}\n`;
+              errorReport += `**Project Key:** ${projectKey}\n`;
+              errorReport += `**Token:** ${sonarToken ? '✓ Configurado' : '✗ Não configurado'}\n`;
+              
+              fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, errorReport);
+              
               // Não falha o workflow, apenas avisa
             }
         env:
