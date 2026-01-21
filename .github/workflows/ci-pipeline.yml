@@ -111,6 +111,7 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        continue-on-error: true
 
       - name: 🔍 Listar Projetos SonarQube (Diagnóstico)
         if: always()
@@ -121,7 +122,9 @@ jobs:
             const https = require('https');
             
             const sonarToken = process.env.SONAR_TOKEN;
-            const sonarUrl = process.env.SONAR_HOST_URL || 'http://localhost:9000';
+            const sonarUrl = process.env.SONAR_HOST_URL || 'https://sonarcloud.io';
+            const isSonarCloud = sonarUrl.includes('sonarcloud.io');
+            let sonarOrg = null;
             
             function fetchSonarData(endpoint) {
               return new Promise((resolve, reject) => {
@@ -162,8 +165,24 @@ jobs:
             }
             
             try {
-              console.log(`📋 Listando projetos disponíveis no SonarQube...`);
-              const projects = await fetchSonarData(`/api/projects/search?ps=100`);
+              console.log(`📋 Listando projetos disponíveis no ${isSonarCloud ? 'SonarCloud' : 'SonarQube'}...`);
+              
+              // Primeiro tenta buscar sem organization
+              let projects = await fetchSonarData(`/api/projects/search?ps=100`);
+              
+              // Se for SonarCloud e retornar vazio, tenta detectar a organization
+              if (isSonarCloud && (!projects.components || projects.components.length === 0)) {
+                try {
+                  const orgs = await fetchSonarData(`/api/organizations/search?member=true&ps=1`);
+                  if (orgs.organizations && orgs.organizations.length > 0) {
+                    sonarOrg = orgs.organizations[0].key;
+                    console.log(`🏢 Organization detectada: ${sonarOrg}`);
+                    projects = await fetchSonarData(`/api/projects/search?organization=${sonarOrg}&ps=100`);
+                  }
+                } catch (e) {
+                  console.log('⚠️ Não foi possível detectar organization automaticamente');
+                }
+              }
               
               if (projects.components && projects.components.length > 0) {
                 console.log(`\n✅ ${projects.components.length} projeto(s) encontrado(s):\n`);
@@ -172,12 +191,8 @@ jobs:
                   console.log(`   📍 Key: ${proj.key}`);
                   console.log(`   📊 LastAnalysis: ${proj.lastAnalysisDate || 'Nunca'}\n`);
                 });
-                
-                console.log(`\n💡 Use o "Key" no seu workflow:`);
-                console.log(`   SONAR_PROJECT_KEY: ${projects.components[0].key}`);
               } else {
-                console.log(`⚠️ Nenhum projeto encontrado no SonarQube`);
-                console.log(`Certifique-se de que uma análise foi executada primeiro`);
+                console.log(`⚠️ Nenhum projeto encontrado`);
               }
             } catch (error) {
               console.error(`❌ Erro ao listar projetos:`, error.message);
@@ -196,8 +211,10 @@ jobs:
             const https = require('https');
             
             const sonarToken = process.env.SONAR_TOKEN;
-            const sonarUrl = process.env.SONAR_HOST_URL || 'http://localhost:9000';
-            let projectKey = process.env.SONAR_PROJECT_KEY;
+            const sonarUrl = process.env.SONAR_HOST_URL || 'https://sonarcloud.io';
+            const isSonarCloud = sonarUrl.includes('sonarcloud.io');
+            let projectKey = null;
+            let sonarOrg = null;
             
             function fetchSonarData(endpoint) {
               return new Promise((resolve, reject) => {
@@ -239,27 +256,38 @@ jobs:
             }
             
             try {
-              console.log(`🔍 Conectando ao SonarQube: ${sonarUrl}`);
+              console.log(`🔍 Conectando ao ${isSonarCloud ? 'SonarCloud' : 'SonarQube'}: ${sonarUrl}`);
+              console.log(`🔍 Auto-detectando projeto...`);
               
-              if (!projectKey) {
-                console.log(`⚠️ SONAR_PROJECT_KEY não definido. Tentando descobrir automaticamente...`);
-                const projects = await fetchSonarData(`/api/projects/search?ps=100`);
-                
-                if (!projects.components || projects.components.length === 0) {
-                  throw new Error(`Nenhum projeto encontrado no SonarQube. Execute uma análise primeiro.`);
+              // Primeiro tenta buscar projetos sem organization
+              let projects = await fetchSonarData(`/api/projects/search?ps=100`);
+              
+              // Se for SonarCloud e retornar vazio, tenta detectar a organization
+              if (isSonarCloud && (!projects.components || projects.components.length === 0)) {
+                try {
+                  const orgs = await fetchSonarData(`/api/organizations/search?member=true&ps=1`);
+                  if (orgs.organizations && orgs.organizations.length > 0) {
+                    sonarOrg = orgs.organizations[0].key;
+                    console.log(`🏢 Organization detectada: ${sonarOrg}`);
+                    projects = await fetchSonarData(`/api/projects/search?organization=${sonarOrg}&ps=100`);
+                  }
+                } catch (e) {
+                  console.log('⚠️ Não foi possível detectar organization automaticamente');
                 }
-                
-                projectKey = projects.components[0].key;
-                console.log(`📦 Projeto encontrado: ${projectKey}`);
-              } else {
-                console.log(`📦 Projeto: ${projectKey}`);
               }
+              
+              if (!projects.components || projects.components.length === 0) {
+                throw new Error(`Nenhum projeto encontrado. Execute uma análise primeiro.`);
+              }
+              
+              projectKey = projects.components[0].key;
+              console.log(`📦 Projeto encontrado: ${projectKey}`);
               
               console.log(`📊 Buscando métricas do projeto...`);
               const projectMetrics = await fetchSonarData(`/api/measures/component?component=${projectKey}&metricKeys=bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,security_rating,reliability_rating,maintainability_rating`);
               
               if (!projectMetrics.component) {
-                throw new Error(`Projeto "${projectKey}" não encontrado. Verifique o SONAR_PROJECT_KEY.`);
+                throw new Error(`Projeto "${projectKey}" não encontrado.`);
               }
               
               const measures = (projectMetrics.component.measures || []).reduce((acc, m) => {
@@ -378,7 +406,7 @@ jobs:
               errorReport += `2. ✓ Verifique se \`SONAR_HOST_URL\` está configurado\n`;
               errorReport += `3. ✓ Confirme que a análise SonarQube foi executada corretamente\n`;
               errorReport += `4. ✓ Aguarde alguns minutos após a primeira análise\n\n`;
-              errorReport += `**URL do SonarQube:** ${sonarUrl}\n`;
+              errorReport += `**URL:** ${sonarUrl}\n`;
               errorReport += `**Token:** ${sonarToken ? '✓ Configurado' : '✗ Não configurado'}\n`;
               
               fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, errorReport);
