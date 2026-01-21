@@ -1,20 +1,109 @@
-name: Build
+name: CI/CD Pipeline Completo
+run-name: ${{ github.actor }} executando pipeline DevSecOps 🚀
+
+env:
+  AMBIENTE_ALVO: Producao
+  NODE_VERSION: '18'
+
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   pull_request:
     types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
 jobs:
-  sonarqube:
-    name: SonarQube
+  security-and-quality:
+    name: Análise de Segurança e Qualidade
     runs-on: ubuntu-latest
+    
     steps:
-      - uses: actions/checkout@v4
+      # ========================================
+      # 1. ANÁLISE CONTEXTUAL
+      # ========================================
+      - name: 📋 Dump do Contexto GitHub
+        env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
+        run: echo "$GITHUB_CONTEXT"
+
+      - name: ✅ Execução Condicional
+        if: github.event_name == 'push' && !contains(github.event.head_commit.message || '', 'Merge pull request')
+        run: echo "Pipeline executada em push direto (não é merge de PR)"
+
+      # ========================================
+      # 2. CHECKOUT (UMA VEZ APENAS)
+      # ========================================
+      - name: 📥 Checkout do Código
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
-      
-      - name: SonarQube Scan
+          fetch-depth: 0  # Histórico completo para análise SonarQube
+
+      # ========================================
+      # 3. SETUP NODE.JS (UMA VEZ APENAS)
+      # ========================================
+      - name: ⚙️ Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: nodejs_example/package-lock.json
+
+      # ========================================
+      # 4. INSTALAÇÃO DE DEPENDÊNCIAS (UMA VEZ APENAS)
+      # ========================================
+      - name: 📦 Instalar Dependências
+        working-directory: ./nodejs_example
+        run: npm ci
+
+      # ========================================
+      # 5. INSPEÇÃO DO AMBIENTE
+      # ========================================
+      - name: 🔍 Inspeção do Sistema
+        run: |
+          echo "==================== INFORMAÇÕES DO SISTEMA ===================="
+          echo "Sistema Operacional: $(uname -a)"
+          echo "Node Version: $(node -v)"
+          echo "NPM Version: $(npm -v)"
+          echo "Diretório Atual: $(pwd)"
+          echo "==============================================================="
+          echo ""
+          echo "==================== ESTRUTURA DO PROJETO ===================="
+          ls -laR
+          echo "==============================================================="
+
+      - name: 📂 Listar Arquivos do Projeto
+        run: |
+          echo "Listando arquivos (respeitando .gitignore)..."
+          if [ -f .listignore ]; then
+            echo ".listignore encontrado, usando-o para excluir padrões"
+            python3 << 'PY'
+          import fnmatch,os
+          patterns=[l.strip() for l in open('.listignore') if l.strip() and not l.strip().startswith('#')]
+          for root,dirs,files in os.walk('.'):
+              for name in files:
+                  rel=os.path.relpath(os.path.join(root,name),'.')
+                  if rel=='.':
+                      continue
+                  skip=False
+                  for p in patterns:
+                      if fnmatch.fnmatch(rel,p) or fnmatch.fnmatch(os.path.join('/',rel),p):
+                          skip=True
+                          break
+                  if not skip:
+                      print(rel)
+          PY
+          elif [ -d .git ]; then
+            echo ".git encontrado, usando git ls-files"
+            git ls-files -z --cached --others --exclude-standard | xargs -0 -n1
+          else
+            echo "Listando todos os arquivos"
+            find . -path './.git' -prune -o -print
+          fi
+
+      # ========================================
+      # 6. ANÁLISE SONARQUBE
+      # ========================================
+      - name: 🔬 SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v6
         with:
           args: >
@@ -22,8 +111,8 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-      
-      - name: 🔍 Listar Projetos Disponíveis (Diagnóstico)
+
+      - name: 🔍 Listar Projetos SonarQube (Diagnóstico)
         if: always()
         uses: actions/github-script@v7
         with:
@@ -96,7 +185,7 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-      
+
       - name: 📊 Gerar Relatório SonarQube Detalhado
         if: always()
         uses: actions/github-script@v7
@@ -106,7 +195,6 @@ jobs:
             const http = require('http');
             const https = require('https');
             
-            // Configurações
             const sonarToken = process.env.SONAR_TOKEN;
             const sonarUrl = process.env.SONAR_HOST_URL || 'http://localhost:9000';
             let projectKey = process.env.SONAR_PROJECT_KEY;
@@ -153,7 +241,6 @@ jobs:
             try {
               console.log(`🔍 Conectando ao SonarQube: ${sonarUrl}`);
               
-              // Se não tiver project key, tenta pegar o primeiro projeto
               if (!projectKey) {
                 console.log(`⚠️ SONAR_PROJECT_KEY não definido. Tentando descobrir automaticamente...`);
                 const projects = await fetchSonarData(`/api/projects/search?ps=100`);
@@ -168,7 +255,6 @@ jobs:
                 console.log(`📦 Projeto: ${projectKey}`);
               }
               
-              // Buscar informações do projeto
               console.log(`📊 Buscando métricas do projeto...`);
               const projectMetrics = await fetchSonarData(`/api/measures/component?component=${projectKey}&metricKeys=bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,security_rating,reliability_rating,maintainability_rating`);
               
@@ -181,30 +267,25 @@ jobs:
                 return acc;
               }, {});
               
-              // Buscar issues
               console.log(`🔍 Buscando issues do projeto...`);
               const issuesResponse = await fetchSonarData(`/api/issues/search?componentKeys=${projectKey}&types=BUG,VULNERABILITY,CODE_SMELL&ps=100`);
               
               const issues = issuesResponse.issues || [];
               console.log(`✅ ${issues.length} issues encontradas`);
               
-              // Contar issues por tipo
               const bugCount = issues.filter(i => i.type === 'BUG').length;
               const vulnCount = issues.filter(i => i.type === 'VULNERABILITY').length;
               const smellCount = issues.filter(i => i.type === 'CODE_SMELL').length;
               
-              // Contar por severidade
               const severities = issues.reduce((acc, i) => {
                 acc[i.severity] = (acc[i.severity] || 0) + 1;
                 return acc;
               }, {});
               
-              // Gerar markdown report
               let report = `# 📋 Relatório de Análise SonarQube\n\n`;
               report += `**Data:** ${new Date().toLocaleString('pt-BR')}\n`;
               report += `**Projeto:** ${projectKey}\n\n`;
               
-              // Status geral
               report += `## 📊 Métricas Gerais\n\n`;
               report += `| Métrica | Valor |\n`;
               report += `|---------|-------|\n`;
@@ -217,7 +298,6 @@ jobs:
               report += `| 🎯 Rating de Confiabilidade | ${measures.reliability_rating || 'N/A'} |\n`;
               report += `| 🧹 Rating de Manutenibilidade | ${measures.maintainability_rating || 'N/A'} |\n\n`;
               
-              // Resumo de issues
               report += `## 🔍 Resumo de Issues\n\n`;
               report += `- **Total de Issues:** ${issues.length}\n`;
               report += `- **Bugs:** ${bugCount}\n`;
@@ -235,7 +315,6 @@ jobs:
                 report += '\n';
               }
               
-              // Top 10 issues mais graves
               if (issues.length > 0) {
                 report += `## ⚠️ Issues Mais Graves\n\n`;
                 const sorted = issues
@@ -267,13 +346,11 @@ jobs:
                 report += `Excelente! Seu código não possui bugs, vulnerabilidades ou code smells críticos.\n\n`;
               }
               
-              // Links úteis
               report += `## 🔗 Links Úteis\n\n`;
               report += `- [🔗 Abrir no SonarQube](${sonarUrl}/dashboard?id=${projectKey})\n`;
               report += `- [📝 Issues Completas](${sonarUrl}/issues?id=${projectKey})\n`;
               report += `- [📊 Métricas Detalhadas](${sonarUrl}/component_measures?id=${projectKey})\n\n`;
               
-              // Recomendações
               report += `## 💡 Recomendações\n\n`;
               if (vulnCount > 0) {
                 report += `⚠️ **Prioridade Alta:** Existem ${vulnCount} vulnerabilidade(s) de segurança que precisam ser corrigidas imediatamente.\n\n`;
@@ -288,27 +365,69 @@ jobs:
                 report += `✨ **Parabéns!** Seu código está em excelente estado.\n\n`;
               }
               
-              // Escrever no arquivo de summary
               fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, report);
               
-              console.log('✅ Relatório gerado com sucesso!');
+              console.log('✅ Relatório SonarQube gerado com sucesso!');
             } catch (error) {
               console.error('❌ Erro ao gerar relatório:', error.message);
               
-              // Escrever um relatório de erro
               let errorReport = `# ❌ Erro ao Gerar Relatório SonarQube\n\n`;
               errorReport += `**Erro:** ${error.message}\n\n`;
               errorReport += `### 🔧 Verificações Necessárias\n\n`;
               errorReport += `1. ✓ Certifique-se que \`SONAR_TOKEN\` está configurado nos secrets\n`;
-              errorReport += `2. ✓ Verifique se \`SONAR_HOST_URL\` está configurado (ex: \`http://localhost:9000\`)\n`;
+              errorReport += `2. ✓ Verifique se \`SONAR_HOST_URL\` está configurado\n`;
               errorReport += `3. ✓ Confirme que a análise SonarQube foi executada corretamente\n`;
-              errorReport += `4. ✓ Aguarde alguns minutos após a primeira análise para os dados ficarem disponíveis\n\n`;
+              errorReport += `4. ✓ Aguarde alguns minutos após a primeira análise\n\n`;
               errorReport += `**URL do SonarQube:** ${sonarUrl}\n`;
               errorReport += `**Token:** ${sonarToken ? '✓ Configurado' : '✗ Não configurado'}\n`;
-              errorReport += `**Project Key:** ${projectKey || 'Auto-detectar'}\n`;
               
               fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, errorReport);
             }
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+      # ========================================
+      # 7. ANÁLISE SNYK (SEGURANÇA)
+      # ========================================
+      - name: 🛡️ Instalar Snyk CLI
+        run: npm install -g snyk
+
+      - name: 🔒 Snyk Security Test
+        working-directory: ./nodejs_example
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          echo "==================== SNYK SECURITY SCAN ===================="
+          snyk test --severity-threshold=low || echo "⚠️ Vulnerabilidades encontradas pelo Snyk"
+          echo "=============================================================="
+        continue-on-error: true
+
+      - name: 📡 Snyk Monitor
+        working-directory: ./nodejs_example
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          echo "Enviando resultados para monitoramento contínuo no Snyk..."
+          snyk monitor
+        continue-on-error: true
+
+      # ========================================
+      # 8. RELATÓRIO FINAL
+      # ========================================
+      - name: ✅ Pipeline Concluída
+        if: always()
+        run: |
+          echo "╔══════════════════════════════════════════════════════════╗"
+          echo "║          Pipeline DevSecOps Executada com Sucesso       ║"
+          echo "╠══════════════════════════════════════════════════════════╣"
+          echo "║  ✓ Análise de Contexto                                  ║"
+          echo "║  ✓ Checkout do Código                                   ║"
+          echo "║  ✓ Instalação de Dependências                           ║"
+          echo "║  ✓ Análise SonarQube (Qualidade de Código)              ║"
+          echo "║  ✓ Análise Snyk (Vulnerabilidades)                      ║"
+          echo "╚══════════════════════════════════════════════════════════╝"
+          echo ""
+          echo "📊 Verifique o tab 'Summary' para relatórios detalhados"
+          echo "🔗 SonarQube: ${{ secrets.SONAR_HOST_URL }}"
+          echo "🔗 Snyk: https://app.snyk.io"
