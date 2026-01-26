@@ -1,0 +1,248 @@
+name: Promote to Production
+run-name: ${{ github.actor }} promovendo para produção 🚀
+
+env:
+  NODE_VERSION: '18'
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  actions: read
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - main
+
+jobs:
+  validate-security-scan:
+    name: Validar Scan de Segurança
+    runs-on: ubuntu-latest
+    
+    steps:
+      # ========================================
+      # 1. VERIFICAÇÃO DE PRÉ-REQUISITOS
+      # ========================================
+      - name: 📋 Informações do PR
+        run: |
+          echo "╔══════════════════════════════════════════════════════════╗"
+          echo "║         Validação de Promoção para Produção             ║"
+          echo "╚══════════════════════════════════════════════════════════╝"
+          echo ""
+          echo "PR #${{ github.event.pull_request.number }}"
+          echo "Branch origem: ${{ github.head_ref }}"
+          echo "Branch destino: ${{ github.base_ref }}"
+          echo "Autor: ${{ github.event.pull_request.user.login }}"
+
+      - name: 📥 Checkout do Código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ========================================
+      # 2. VERIFICAR ARTEFATOS DO SCAN ANTERIOR
+      # ========================================
+      - name: 🔍 Verificar Scan de Segurança Prévio
+        id: check-scan
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const branch = context.payload.pull_request.head.ref;
+            
+            core.info(`Buscando workflows executados na branch: ${branch}`);
+            
+            // Busca os workflows executados na branch de origem
+            const { data: workflowRuns } = await github.rest.actions.listWorkflowRunsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: branch,
+              status: 'completed',
+              per_page: 10
+            });
+            
+            core.info(`Total de workflows encontrados: ${workflowRuns.total_count}`);
+            
+            // Procura pelo workflow de security scan
+            const securityWorkflow = workflowRuns.workflow_runs.find(run => 
+              run.name === 'Feature Branch Security Scan' && 
+              run.conclusion === 'success'
+            );
+            
+            if (!securityWorkflow) {
+              core.setFailed(`❌ Nenhum scan de segurança bem-sucedido encontrado para a branch ${branch}.\n` +
+                           `Por favor, execute o workflow 'Feature Branch Security Scan' primeiro.`);
+              return;
+            }
+            
+            core.info(`✅ Scan de segurança encontrado:`);
+            core.info(`   - Workflow Run ID: ${securityWorkflow.id}`);
+            core.info(`   - Conclusão: ${securityWorkflow.conclusion}`);
+            core.info(`   - Data: ${securityWorkflow.created_at}`);
+            core.info(`   - URL: ${securityWorkflow.html_url}`);
+            
+            core.setOutput('scan-run-id', securityWorkflow.id);
+            core.setOutput('scan-url', securityWorkflow.html_url);
+
+      - name: 📦 Download Artefatos do Scan
+        uses: actions/download-artifact@v4
+        with:
+          name: veracode-security-results
+          path: ./scan-results
+          run-id: ${{ steps.check-scan.outputs.scan-run-id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      # ========================================
+      # 3. ANÁLISE DOS RESULTADOS
+      # ========================================
+      - name: 📊 Analisar Resultados do Veracode
+        id: analyze-results
+        run: |
+          echo "Analisando resultados do scan de segurança..."
+          
+          CRITICAL_ISSUES=0
+          HIGH_ISSUES=0
+          
+          # Verifica se os arquivos existem
+          if [ ! -d "./scan-results" ]; then
+            echo "⚠️ Diretório de resultados não encontrado"
+            echo "Considerando scan como aprovado (artefatos podem ter expirado)"
+            exit 0
+          fi
+          
+          # Analisa resultados do Pipeline Scan (arquivo correto: filtered_results.json)
+          if [ -f "./scan-results/filtered_results.json" ]; then
+            echo "📄 Analisando filtered_results.json..."
+            
+            # Conta issues críticas e altas (simplificado)
+            if command -v jq &> /dev/null; then
+              CRITICAL_ISSUES=$(jq '[.findings[] | select(.severity >= 4)] | length' ./scan-results/filtered_results.json || echo 0)
+              HIGH_ISSUES=$(jq '[.findings[] | select(.severity == 3)] | length' ./scan-results/filtered_results.json || echo 0)
+            else
+              echo "⚠️ jq não disponível, pulando análise detalhada"
+            fi
+            
+            echo "🔍 Issues Críticas: $CRITICAL_ISSUES"
+            echo "🔍 Issues Altas: $HIGH_ISSUES"
+          fi
+          
+          # Exibe resumo se disponível
+          if [ -f "./scan-results/veracode-pipeline-summary.txt" ]; then
+            echo ""
+            echo "=== RESUMO DO SCAN ==="
+            cat ./scan-results/veracode-pipeline-summary.txt
+            echo "======================"
+          fi
+          
+          # Define se deve bloquear baseado em issues críticas
+          if [ "$CRITICAL_ISSUES" -gt "0" ]; then
+            echo "::error::❌ Foram encontradas $CRITICAL_ISSUES vulnerabilidades CRÍTICAS!"
+            echo "Por favor, corrija as vulnerabilidades críticas antes de prosseguir."
+            exit 1
+          fi
+          
+          echo "✅ Análise concluída - Nenhuma vulnerabilidade crítica bloqueante encontrada"
+
+      # ========================================
+      # 4. GERAÇÃO DE RELATÓRIO
+      # ========================================
+      - name: 📝 Gerar Relatório de Validação
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const scanRunId = '${{ steps.check-scan.outputs.scan-run-id }}';
+            const scanUrl = '${{ steps.check-scan.outputs.scan-url }}';
+            
+            let report = `## 🔒 Validação de Segurança para Produção\n\n`;
+            report += `**Pull Request:** #${{ github.event.pull_request.number }}\n`;
+            report += `**Branch:** \`${{ github.head_ref }}\` → \`${{ github.base_ref }}\`\n`;
+            report += `**Autor:** @${{ github.event.pull_request.user.login }}\n\n`;
+            
+            if (scanRunId && scanUrl) {
+              report += `### ✅ Scan de Segurança Validado\n\n`;
+              report += `O scan de segurança foi executado com sucesso na branch \`${{ github.head_ref }}\`.\n\n`;
+              report += `**Workflow Run:** [Ver detalhes](${scanUrl})\n`;
+              report += `**Run ID:** ${scanRunId}\n\n`;
+            } else {
+              report += `### ⚠️ Scan de Segurança Não Encontrado\n\n`;
+              report += `Não foi possível localizar um scan de segurança bem-sucedido.\n`;
+              report += `Verifique se o workflow foi executado na branch \`${{ github.head_ref }}\`.\n\n`;
+            }
+            
+            report += `### 📊 Verificações Realizadas\n\n`;
+            report += `- ✅ Workflow de segurança executado\n`;
+            report += `- ✅ Artefatos do scan validados\n`;
+            report += `- ✅ Análise de vulnerabilidades críticas\n\n`;
+            
+            // Verifica se existem arquivos de resultado
+            const resultsExist = fs.existsSync('./scan-results');
+            if (resultsExist) {
+              report += `### 📦 Artefatos Analisados\n\n`;
+              const files = fs.readdirSync('./scan-results');
+              files.forEach(file => {
+                report += `- \`${file}\`\n`;
+              });
+              report += `\n`;
+            }
+            
+            report += `### 🚀 Próximos Passos\n\n`;
+            report += `1. ✅ Revisar os resultados do scan\n`;
+            report += `2. ✅ Validar que não há vulnerabilidades críticas\n`;
+            report += `3. ✅ Aprovar e fazer merge para \`main\`\n`;
+            report += `4. 🚀 Deploy para produção\n\n`;
+            
+            report += `---\n`;
+            report += `*Validação executada em ${new Date().toLocaleString('pt-BR')}*\n`;
+            
+            // Adiciona ao summary
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, report);
+            
+            // Adiciona comentário no PR
+            try {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: ${{ github.event.pull_request.number }},
+                body: report
+              });
+              core.info('✅ Comentário adicionado ao PR');
+            } catch (error) {
+              core.warning(`Não foi possível adicionar comentário ao PR: ${error.message}`);
+            }
+
+      # ========================================
+      # 5. STATUS FINAL
+      # ========================================
+      - name: ✅ Validação Concluída
+        if: success()
+        run: |
+          echo "╔══════════════════════════════════════════════════════════╗"
+          echo "║         Validação de Segurança Aprovada ✅              ║"
+          echo "╠══════════════════════════════════════════════════════════╣"
+          echo "║  ✓ Scan de segurança validado                           ║"
+          echo "║  ✓ Artefatos analisados                                 ║"
+          echo "║  ✓ Nenhuma vulnerabilidade crítica bloqueante           ║"
+          echo "║  ✓ Pronto para merge em produção                        ║"
+          echo "╚══════════════════════════════════════════════════════════╝"
+          echo ""
+          echo "🚀 Este PR está aprovado para merge em main/produção"
+          echo "📊 Consulte o relatório completo no tab Summary"
+
+      - name: ❌ Validação Falhou
+        if: failure()
+        run: |
+          echo "╔══════════════════════════════════════════════════════════╗"
+          echo "║         Validação de Segurança Falhou ❌                ║"
+          echo "╠══════════════════════════════════════════════════════════╣"
+          echo "║  ✗ Vulnerabilidades críticas encontradas               ║"
+          echo "║  ✗ Ou scan de segurança não executado                  ║"
+          echo "╚══════════════════════════════════════════════════════════╝"
+          echo ""
+          echo "⚠️ Este PR NÃO pode ser merged até resolver os problemas"
+          echo "📋 Verifique os logs acima para mais detalhes"

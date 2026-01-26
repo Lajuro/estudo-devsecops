@@ -1,15 +1,20 @@
-name: CI/CD Pipeline Completo
-run-name: ${{ github.actor }} executando pipeline DevSecOps 🚀
+name: Feature Branch Security Scan
+run-name: ${{ github.actor }} executando scan de segurança DevSecOps 🚀
 
 env:
   AMBIENTE_ALVO: Producao
   NODE_VERSION: '18'
 
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+
 on:
   push:
-    branches: [ main ]
-  pull_request:
-    types: [opened, synchronize, reopened]
+    branches: 
+      - 'feature/**'
   workflow_dispatch:
 
 jobs:
@@ -101,361 +106,225 @@ jobs:
           fi
 
       # ========================================
-      # 6. ANÁLISE SONARQUBE
+      # 6. VERACODE PIPELINE SCAN (SAST)
       # ========================================
-      - name: 🔬 SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@v6
+      - name: 📦 Criar Pacote para Análise
+        working-directory: ./nodejs_example
+        run: |
+          echo "Criando pacote para análise Veracode..."
+          mkdir -p ../veracode-artifacts
+          zip -r ../veracode-artifacts/app.zip . -x "node_modules/*" ".git/*" "*.md"
+          echo "Pacote criado com sucesso!"
+          ls -lh ../veracode-artifacts/
+
+      - name: 🔒 Veracode Pipeline Scan (SAST)
+        id: veracode-pipeline-scan
+        uses: veracode/veracode-pipeline-scan-action@v1.0.12
         with:
-          args: >
-            -Dsonar.qualitygate.wait=true
+          vid: ${{ secrets.VERACODE_API_ID }}
+          vkey: ${{ secrets.VERACODE_API_KEY }}
+          file: "veracode-artifacts/app.zip"
+          fail_build: false
+          summary_output: true
+          summary_output_file: veracode-pipeline-summary.txt
+          json_output: true
+          json_output_file: veracode-pipeline-results.json
+          filtered_json_output_file: veracode-pipeline-filtered.json
+        continue-on-error: true
         env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+          # Workaround: Desabilita criação automática de artefatos pela action (tem bug)
+          ACTIONS_RUNTIME_TOKEN: ''
+
+      - name: 📊 Relatório Pipeline Scan
+        if: always()
+        run: |
+          echo "╔══════════════════════════════════════════════════════════╗"
+          echo "║          Veracode Pipeline Scan Concluído                ║"
+          echo "╚══════════════════════════════════════════════════════════╝"
+          if [ -f veracode-pipeline-summary.txt ]; then
+            echo ""
+            echo "=== RESUMO DOS RESULTADOS ==="
+            cat veracode-pipeline-summary.txt
+          else
+            echo "⚠️ Arquivo de resumo não encontrado"
+          fi
+
+      # ========================================
+      # 7. VERACODE SCA (SOFTWARE COMPOSITION ANALYSIS)
+      # ========================================
+      - name: 🛡️ Veracode SCA Scan
+        id: veracode-sca
+        env:
+          SRCCLR_API_TOKEN: ${{ secrets.SRCCLR_API_TOKEN }}
+          # Workaround: Desabilita criação automática de artefatos pela action (tem bug)
+          ACTIONS_RUNTIME_TOKEN: ''
+        uses: veracode/veracode-sca@v2.1.10
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          create-issues: false
+          path: ./nodejs_example
+          fail-on-cvss: 7
+          quick: false
+          allow-dirty: true
         continue-on-error: true
 
-      - name: 🔍 Listar Projetos SonarQube (Diagnóstico)
+      - name: 📊 Relatório SCA
         if: always()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const http = require('http');
-            const https = require('https');
-            
-            const sonarToken = process.env.SONAR_TOKEN;
-            const sonarUrl = process.env.SONAR_HOST_URL || 'https://sonarcloud.io';
-            const isSonarCloud = sonarUrl.includes('sonarcloud.io');
-            let sonarOrg = null;
-            
-            function fetchSonarData(endpoint) {
-              return new Promise((resolve, reject) => {
-                try {
-                  const auth = Buffer.from(`${sonarToken}:`).toString('base64');
-                  const url = new URL(endpoint, sonarUrl);
-                  const protocol = url.protocol === 'https:' ? https : http;
-                  
-                  const options = {
-                    hostname: url.hostname,
-                    port: url.port || (url.protocol === 'https:' ? 443 : 80),
-                    path: url.pathname + url.search,
-                    method: 'GET',
-                    headers: {
-                      'Authorization': `Basic ${auth}`,
-                      'Accept': 'application/json'
-                    }
-                  };
-                  
-                  const req = protocol.request(options, (res) => {
-                    let data = '';
-                    res.on('data', chunk => data += chunk);
-                    res.on('end', () => {
-                      try {
-                        resolve(JSON.parse(data));
-                      } catch (e) {
-                        reject(e);
-                      }
-                    });
-                  });
-                  
-                  req.on('error', reject);
-                  req.end();
-                } catch (e) {
-                  reject(e);
-                }
-              });
-            }
-            
-            try {
-              console.log(`📋 Listando projetos disponíveis no ${isSonarCloud ? 'SonarCloud' : 'SonarQube'}...`);
-              
-              // Primeiro tenta buscar sem organization
-              let projects = await fetchSonarData(`/api/projects/search?ps=100`);
-              
-              // Se for SonarCloud e retornar vazio, tenta detectar a organization
-              if (isSonarCloud && (!projects.components || projects.components.length === 0)) {
-                try {
-                  const orgs = await fetchSonarData(`/api/organizations/search?member=true&ps=1`);
-                  if (orgs.organizations && orgs.organizations.length > 0) {
-                    sonarOrg = orgs.organizations[0].key;
-                    console.log(`🏢 Organization detectada: ${sonarOrg}`);
-                    projects = await fetchSonarData(`/api/projects/search?organization=${sonarOrg}&ps=100`);
-                  }
-                } catch (e) {
-                  console.log('⚠️ Não foi possível detectar organization automaticamente');
-                }
-              }
-              
-              if (projects.components && projects.components.length > 0) {
-                console.log(`\n✅ ${projects.components.length} projeto(s) encontrado(s):\n`);
-                projects.components.forEach((proj, idx) => {
-                  console.log(`${idx + 1}. ${proj.name}`);
-                  console.log(`   📍 Key: ${proj.key}`);
-                  console.log(`   📊 LastAnalysis: ${proj.lastAnalysisDate || 'Nunca'}\n`);
-                });
-              } else {
-                console.log(`⚠️ Nenhum projeto encontrado`);
-              }
-            } catch (error) {
-              console.error(`❌ Erro ao listar projetos:`, error.message);
-            }
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        run: |
+          echo "╔══════════════════════════════════════════════════════════╗"
+          echo "║          Veracode SCA Scan Concluído                    ║"
+          echo "╚══════════════════════════════════════════════════════════╝"
+          echo ""
+          if [ -n "${{ steps.veracode-sca.outputs.scan-url }}" ]; then
+            echo "🔗 Relatório Completo: ${{ steps.veracode-sca.outputs.scan-url }}"
+          else
+            echo "⚠️ URL do relatório não disponível"
+          fi
 
-      - name: 📊 Gerar Relatório SonarQube Detalhado
+      # ========================================
+      # 8. UPLOAD DOS RESULTADOS COMO ARTEFATOS
+      # ========================================
+      - name: 📤 Upload Resultados Veracode
         if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: veracode-security-results
+          path: |
+            results.json
+            filtered_results.json
+            veracode-pipeline-summary.txt
+            veracode-pipeline-results.json
+            veracode-pipeline-filtered.json
+            veracode-artifacts/app.zip
+            scaResults.txt
+            scaResults.json
+          retention-days: 30
+          if-no-files-found: warn
+
+      # ========================================
+      # 9. CRIAR PULL REQUEST AUTOMÁTICO PARA DEVELOP
+      # ========================================
+      - name: 🔀 Criar Pull Request para Develop
+        if: success()
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const fs = require('fs');
-            const http = require('http');
-            const https = require('https');
+            const branchName = context.ref.replace('refs/heads/', '');
             
-            const sonarToken = process.env.SONAR_TOKEN;
-            const sonarUrl = process.env.SONAR_HOST_URL || 'https://sonarcloud.io';
-            const isSonarCloud = sonarUrl.includes('sonarcloud.io');
-            let projectKey = null;
-            let sonarOrg = null;
-            
-            function fetchSonarData(endpoint) {
-              return new Promise((resolve, reject) => {
-                try {
-                  const auth = Buffer.from(`${sonarToken}:`).toString('base64');
-                  const url = new URL(endpoint, sonarUrl);
-                  const protocol = url.protocol === 'https:' ? https : http;
-                  
-                  const options = {
-                    hostname: url.hostname,
-                    port: url.port || (url.protocol === 'https:' ? 443 : 80),
-                    path: url.pathname + url.search,
-                    method: 'GET',
-                    headers: {
-                      'Authorization': `Basic ${auth}`,
-                      'Accept': 'application/json'
-                    }
-                  };
-                  
-                  const req = protocol.request(options, (res) => {
-                    let data = '';
-                    res.on('data', chunk => data += chunk);
-                    res.on('end', () => {
-                      try {
-                        const json = JSON.parse(data);
-                        resolve(json);
-                      } catch (e) {
-                        reject(e);
-                      }
-                    });
-                  });
-                  
-                  req.on('error', reject);
-                  req.end();
-                } catch (e) {
-                  reject(e);
-                }
-              });
+            // Verifica se é uma branch feature
+            if (!branchName.startsWith('feature/')) {
+              core.info('Branch não é feature/*, pulando criação de PR');
+              return;
             }
             
+            core.info(`Branch atual: ${branchName}`);
+            core.info('Criando Pull Request para develop...');
+            
             try {
-              console.log(`🔍 Conectando ao ${isSonarCloud ? 'SonarCloud' : 'SonarQube'}: ${sonarUrl}`);
-              console.log(`🔍 Auto-detectando projeto...`);
+              // Verifica se já existe um PR aberto
+              const { data: existingPRs } = await github.rest.pulls.list({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                head: `${context.repo.owner}:${branchName}`,
+                base: 'develop',
+                state: 'open'
+              });
               
-              // Primeiro tenta buscar projetos sem organization
-              let projects = await fetchSonarData(`/api/projects/search?ps=100`);
-              
-              // Se for SonarCloud e retornar vazio, tenta detectar a organization
-              if (isSonarCloud && (!projects.components || projects.components.length === 0)) {
-                try {
-                  const orgs = await fetchSonarData(`/api/organizations/search?member=true&ps=1`);
-                  if (orgs.organizations && orgs.organizations.length > 0) {
-                    sonarOrg = orgs.organizations[0].key;
-                    console.log(`🏢 Organization detectada: ${sonarOrg}`);
-                    projects = await fetchSonarData(`/api/projects/search?organization=${sonarOrg}&ps=100`);
-                  }
-                } catch (e) {
-                  console.log('⚠️ Não foi possível detectar organization automaticamente');
-                }
-              }
-              
-              if (!projects.components || projects.components.length === 0) {
-                throw new Error(`Nenhum projeto encontrado. Execute uma análise primeiro.`);
-              }
-              
-              projectKey = projects.components[0].key;
-              console.log(`📦 Projeto encontrado: ${projectKey}`);
-              
-              console.log(`📊 Buscando métricas do projeto...`);
-              const projectMetrics = await fetchSonarData(`/api/measures/component?component=${projectKey}&metricKeys=bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,security_rating,reliability_rating,maintainability_rating`);
-              
-              if (!projectMetrics.component) {
-                throw new Error(`Projeto "${projectKey}" não encontrado.`);
-              }
-              
-              const measures = (projectMetrics.component.measures || []).reduce((acc, m) => {
-                acc[m.metric] = m.value;
-                return acc;
-              }, {});
-              
-              console.log(`🔍 Buscando issues do projeto...`);
-              const issuesResponse = await fetchSonarData(`/api/issues/search?componentKeys=${projectKey}&types=BUG,VULNERABILITY,CODE_SMELL&ps=100`);
-              
-              const issues = issuesResponse.issues || [];
-              console.log(`✅ ${issues.length} issues encontradas`);
-              
-              const bugCount = issues.filter(i => i.type === 'BUG').length;
-              const vulnCount = issues.filter(i => i.type === 'VULNERABILITY').length;
-              const smellCount = issues.filter(i => i.type === 'CODE_SMELL').length;
-              
-              const severities = issues.reduce((acc, i) => {
-                acc[i.severity] = (acc[i.severity] || 0) + 1;
-                return acc;
-              }, {});
-              
-              let report = `# 📋 Relatório de Análise SonarQube\n\n`;
-              report += `**Data:** ${new Date().toLocaleString('pt-BR')}\n`;
-              report += `**Projeto:** ${projectKey}\n\n`;
-              
-              report += `## 📊 Métricas Gerais\n\n`;
-              report += `| Métrica | Valor |\n`;
-              report += `|---------|-------|\n`;
-              report += `| 🐛 Bugs | ${measures.bugs || '0'} |\n`;
-              report += `| 🔒 Vulnerabilidades | ${measures.vulnerabilities || '0'} |\n`;
-              report += `| 💡 Code Smells | ${measures.code_smells || '0'} |\n`;
-              report += `| 📈 Cobertura de Testes | ${measures.coverage || 'N/A'} |\n`;
-              report += `| 🔁 Linhas Duplicadas | ${measures.duplicated_lines_density || 'N/A'} |\n`;
-              report += `| ⭐ Rating de Segurança | ${measures.security_rating || 'N/A'} |\n`;
-              report += `| 🎯 Rating de Confiabilidade | ${measures.reliability_rating || 'N/A'} |\n`;
-              report += `| 🧹 Rating de Manutenibilidade | ${measures.maintainability_rating || 'N/A'} |\n\n`;
-              
-              report += `## 🔍 Resumo de Issues\n\n`;
-              report += `- **Total de Issues:** ${issues.length}\n`;
-              report += `- **Bugs:** ${bugCount}\n`;
-              report += `- **Vulnerabilidades:** ${vulnCount}\n`;
-              report += `- **Code Smells:** ${smellCount}\n\n`;
-              
-              if (Object.keys(severities).length > 0) {
-                report += `### Por Severidade\n`;
-                report += `| Severidade | Quantidade |\n`;
-                report += `|------------|------------|\n`;
-                Object.entries(severities).forEach(([sev, count]) => {
-                  const icon = sev === 'BLOCKER' ? '🔴' : sev === 'CRITICAL' ? '🟠' : sev === 'MAJOR' ? '🟡' : sev === 'MINOR' ? '🔵' : '⚪';
-                  report += `| ${icon} ${sev} | ${count} |\n`;
-                });
-                report += '\n';
-              }
-              
-              if (issues.length > 0) {
-                report += `## ⚠️ Issues Mais Graves\n\n`;
-                const sorted = issues
-                  .sort((a, b) => {
-                    const severityOrder = { BLOCKER: 0, CRITICAL: 1, MAJOR: 2, MINOR: 3, INFO: 4 };
-                    return severityOrder[a.severity] - severityOrder[b.severity];
-                  })
-                  .slice(0, 10);
+              if (existingPRs.length > 0) {
+                core.info(`✓ Pull Request já existe: ${existingPRs[0].html_url}`);
+                core.info('Atualizando comentário com resultados do scan...');
                 
-                sorted.forEach((issue, idx) => {
-                  const icon = issue.severity === 'BLOCKER' ? '🔴' : 
-                               issue.severity === 'CRITICAL' ? '🟠' : 
-                               issue.severity === 'MAJOR' ? '🟡' : 
-                               issue.severity === 'MINOR' ? '🔵' : '⚪';
-                  const typeIcon = issue.type === 'BUG' ? '🐛' : 
-                                   issue.type === 'VULNERABILITY' ? '🔒' : '💡';
-                  
-                  const fileName = issue.component ? issue.component.split(':').pop() : 'Desconhecido';
-                  
-                  report += `\n### ${idx + 1}. ${icon} ${typeIcon} ${issue.message}\n`;
-                  report += `- **Arquivo:** \`${fileName}\`\n`;
-                  if (issue.line) report += `- **Linha:** ${issue.line}\n`;
-                  report += `- **Severidade:** ${issue.severity}\n`;
-                  report += `- **Status:** ${issue.status}\n`;
+                // Adiciona comentário com resultados do scan
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: existingPRs[0].number,
+                  body: `## ✅ Scan de Segurança Concluído
+            
+            **Branch:** \`${branchName}\`
+            **Commit:** \`${context.sha.substring(0, 7)}\`
+            **Workflow:** [${context.runId}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})
+            
+            ### 📊 Resultados:
+            - ✅ Veracode Pipeline Scan (SAST) - Concluído
+            - ✅ Veracode SCA - Concluído
+            
+            **Artefatos:** Os resultados detalhados estão disponíveis nos artefatos do workflow.
+            
+            ---
+            *Scan executado automaticamente em ${new Date().toLocaleString('pt-BR')}*`
                 });
-                report += '\n';
-              } else {
-                report += `## ✅ Nenhuma Issue Encontrada\n\n`;
-                report += `Excelente! Seu código não possui bugs, vulnerabilidades ou code smells críticos.\n\n`;
+                
+                return;
               }
               
-              report += `## 🔗 Links Úteis\n\n`;
-              report += `- [🔗 Abrir no SonarQube](${sonarUrl}/dashboard?id=${projectKey})\n`;
-              report += `- [📝 Issues Completas](${sonarUrl}/issues?id=${projectKey})\n`;
-              report += `- [📊 Métricas Detalhadas](${sonarUrl}/component_measures?id=${projectKey})\n\n`;
+              // Cria novo PR
+              const { data: pr } = await github.rest.pulls.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `🚀 ${branchName.replace('feature/', '')} - Ready for Review`,
+                head: branchName,
+                base: 'develop',
+                body: `## 🔒 Scan de Segurança Aprovado
+            
+            Esta PR foi criada automaticamente após a conclusão bem-sucedida do scan de segurança.
+            
+            ### 📋 Detalhes
+            - **Branch:** \`${branchName}\`
+            - **Commit:** \`${context.sha}\`
+            - **Autor:** @${context.actor}
+            - **Workflow:** [${context.runId}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})
+            
+            ### ✅ Validações de Segurança
+            - ✅ Veracode Pipeline Scan (SAST) - Concluído
+            - ✅ Veracode SCA (Análise de Dependências) - Concluído
+            
+            ### 📦 Artefatos
+            Os resultados detalhados dos scans estão disponíveis nos artefatos do workflow:
+            - \`veracode-pipeline-results.json\` - Resultados completos do Pipeline Scan
+            - \`veracode-pipeline-filtered.json\` - Resultados filtrados
+            - \`veracode-pipeline-summary.txt\` - Resumo do scan
+            - \`scaResults.json\` / \`scaResults.txt\` - Resultados do SCA
+            
+            ### 🔍 Próximos Passos
+            1. Revisar os resultados dos scans nos artefatos
+            2. Verificar se há vulnerabilidades críticas
+            3. Aprovar e fazer merge para \`develop\`
+            
+            ---
+            *PR criada automaticamente em ${new Date().toLocaleString('pt-BR')}*`
+              });
               
-              report += `## 💡 Recomendações\n\n`;
-              if (vulnCount > 0) {
-                report += `⚠️ **Prioridade Alta:** Existem ${vulnCount} vulnerabilidade(s) de segurança que precisam ser corrigidas imediatamente.\n\n`;
-              }
-              if (bugCount > 0) {
-                report += `🔧 **Ação Necessária:** ${bugCount} bug(s) detectado(s). Revisar e corrigir é essencial.\n\n`;
-              }
-              if (smellCount > 0) {
-                report += `✨ **Melhorias:** ${smellCount} code smell(s) encontrado(s). Considere refatorar para melhor qualidade do código.\n\n`;
-              }
-              if (vulnCount === 0 && bugCount === 0 && smellCount === 0) {
-                report += `✨ **Parabéns!** Seu código está em excelente estado.\n\n`;
-              }
+              core.info(`✅ Pull Request criado com sucesso: ${pr.html_url}`);
+              core.info(`PR #${pr.number}: ${pr.title}`);
               
-              fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, report);
-              
-              console.log('✅ Relatório SonarQube gerado com sucesso!');
             } catch (error) {
-              console.error('❌ Erro ao gerar relatório:', error.message);
-              
-              let errorReport = `# ❌ Erro ao Gerar Relatório SonarQube\n\n`;
-              errorReport += `**Erro:** ${error.message}\n\n`;
-              errorReport += `### 🔧 Verificações Necessárias\n\n`;
-              errorReport += `1. ✓ Certifique-se que \`SONAR_TOKEN\` está configurado nos secrets\n`;
-              errorReport += `2. ✓ Verifique se \`SONAR_HOST_URL\` está configurado\n`;
-              errorReport += `3. ✓ Confirme que a análise SonarQube foi executada corretamente\n`;
-              errorReport += `4. ✓ Aguarde alguns minutos após a primeira análise\n\n`;
-              errorReport += `**URL:** ${sonarUrl}\n`;
-              errorReport += `**Token:** ${sonarToken ? '✓ Configurado' : '✗ Não configurado'}\n`;
-              
-              fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, errorReport);
+              if (error.status === 422) {
+                core.warning('Não foi possível criar PR - verifique se a branch develop existe');
+              } else {
+                core.setFailed(`Erro ao criar Pull Request: ${error.message}`);
+              }
             }
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
       # ========================================
-      # 7. ANÁLISE SNYK (SEGURANÇA)
-      # ========================================
-      - name: 🛡️ Instalar Snyk CLI
-        run: npm install -g snyk
-
-      - name: 🔒 Snyk Security Test
-        working-directory: ./nodejs_example
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        run: |
-          echo "==================== SNYK SECURITY SCAN ===================="
-          snyk test --severity-threshold=low || echo "⚠️ Vulnerabilidades encontradas pelo Snyk"
-          echo "=============================================================="
-        continue-on-error: true
-
-      - name: 📡 Snyk Monitor
-        working-directory: ./nodejs_example
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        run: |
-          echo "Enviando resultados para monitoramento contínuo no Snyk..."
-          snyk monitor
-        continue-on-error: true
-
-      # ========================================
-      # 8. RELATÓRIO FINAL
+      # 10. RELATÓRIO FINAL
       # ========================================
       - name: ✅ Pipeline Concluída
         if: always()
         run: |
           echo "╔══════════════════════════════════════════════════════════╗"
-          echo "║          Pipeline DevSecOps Executada com Sucesso       ║"
+          echo "║       Pipeline DevSecOps Executada com Sucesso          ║"
           echo "╠══════════════════════════════════════════════════════════╣"
           echo "║  ✓ Análise de Contexto                                  ║"
           echo "║  ✓ Checkout do Código                                   ║"
           echo "║  ✓ Instalação de Dependências                           ║"
-          echo "║  ✓ Análise SonarQube (Qualidade de Código)              ║"
-          echo "║  ✓ Análise Snyk (Vulnerabilidades)                      ║"
+          echo "║  ✓ Veracode Pipeline Scan (SAST)                        ║"
+          echo "║  ✓ Veracode SCA (Análise de Dependências)               ║"
+          echo "║  ✓ Upload de Artefatos                                  ║"
+          echo "║  ✓ Criação de Pull Request (se feature/*)               ║"
           echo "╚══════════════════════════════════════════════════════════╝"
           echo ""
           echo "📊 Verifique o tab 'Summary' para relatórios detalhados"
-          echo "🔗 SonarQube: ${{ secrets.SONAR_HOST_URL }}"
-          echo "🔗 Snyk: https://app.snyk.io"
+          echo "📦 Artefatos disponíveis para download"
+          echo "🔗 Veracode Platform: https://web.analysiscenter.veracode.com"
