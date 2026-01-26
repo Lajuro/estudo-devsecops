@@ -89,10 +89,12 @@ SRCCLR_API_TOKEN     # Token para Veracode SCA
    - Vá em: Account → API Credentials
    - Gere um novo API ID e Key
 
-2. **SCA Token**
+2. **SCA Token (SRCCLR_API_TOKEN)**
    - Acesse: https://web.analysiscenter.veracode.com/
-   - Vá em: Account → Integrations → Agent-Based Scan
-   - Copie o SRCCLR_API_TOKEN
+   - Vá em: Account → Integrations
+   - Procure por **"Agent-Based Scan"**
+   - Na seção **"CircleCI"** ou **"GitHub Actions"**, copie o `SRCCLR_API_TOKEN`
+   - ⚠️ **Importante:** O token é específico por tipo de integração. Use o da seção apropriada.
 
 ### Configurar no GitHub
 

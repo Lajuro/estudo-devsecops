@@ -161,6 +161,15 @@ git push origin feature/nome-da-feature
 
 ## 📝 Changelog
 
+### v2.1.1 - 2026-01-26 (Hotfix)
+- 🔧 **Corrigido:** Workaround para bug interno das actions do Veracode com artefatos
+  - Desabilitada criação automática de artefatos usando `ACTIONS_RUNTIME_TOKEN: ''`
+  - Actions tentavam criar artefatos com nomes inválidos internamente
+- 🔧 **Corrigido:** Erro "uncommitted changes" no Veracode SCA
+  - Adicionado `allow-dirty: true` para permitir scan em CI/CD
+- 📝 **Documentado:** Diferença entre tokens do SCA (CircleCI vs GitHub Actions)
+- 📝 **Adicionado:** Seção detalhada de troubleshooting no TROUBLESHOOTING.md
+
 ### v2.1.0 - 2026-01-26
 - 🔧 **Corrigido:** Erro de nome inválido no artefato do Veracode Pipeline Scan
 - 🔧 **Corrigido:** Erro de permissões ao criar Pull Request automaticamente

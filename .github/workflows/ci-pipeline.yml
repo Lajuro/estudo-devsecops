@@ -130,8 +130,10 @@ jobs:
           json_output: true
           json_output_file: veracode-pipeline-results.json
           filtered_json_output_file: veracode-pipeline-filtered.json
-          artifact_name: veracode-pipeline-scan-results
         continue-on-error: true
+        env:
+          # Workaround: Desabilita criação automática de artefatos pela action (tem bug)
+          ACTIONS_RUNTIME_TOKEN: ''
 
       - name: 📊 Relatório Pipeline Scan
         if: always()
@@ -154,6 +156,8 @@ jobs:
         id: veracode-sca
         env:
           SRCCLR_API_TOKEN: ${{ secrets.SRCCLR_API_TOKEN }}
+          # Workaround: Desabilita criação automática de artefatos pela action (tem bug)
+          ACTIONS_RUNTIME_TOKEN: ''
         uses: veracode/veracode-sca@v2.1.10
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -161,6 +165,7 @@ jobs:
           path: ./nodejs_example
           fail-on-cvss: 7
           quick: false
+          allow-dirty: true
         continue-on-error: true
 
       - name: 📊 Relatório SCA

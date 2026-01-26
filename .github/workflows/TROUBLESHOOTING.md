@@ -20,25 +20,26 @@ Status Code: 400
 ```
 
 **Causa:**
-O Veracode Pipeline Scan Action tentava criar um artefato com nome contendo hífens e espaços, que não são aceitos pela API do GitHub Actions.
+As actions oficiais da Veracode (v1.0.12 para Pipeline Scan e v2.1.10 para SCA) têm um bug interno onde tentam criar artefatos com nomes contendo espaços, mesmo que você configure `artifact_name`.
 
 **Solução:** ✅ Corrigido!
 
-O workflow foi atualizado para usar:
+O workflow foi atualizado para usar um workaround que desabilita a criação automática de artefatos:
 ```yaml
 - name: 🔒 Veracode Pipeline Scan (SAST)
   uses: veracode/veracode-pipeline-scan-action@v1.0.12
+  env:
+    # Workaround: Desabilita criação automática de artefatos (tem bug)
+    ACTIONS_RUNTIME_TOKEN: ''
   with:
-    artifact_name: veracode-pipeline-scan-results  # ✅ Nome válido
+    # ... outras configurações
 ```
 
-E o artefato de upload também foi renomeado:
-```yaml
-- name: 📤 Upload Resultados Veracode
-  uses: actions/upload-artifact@v4
-  with:
-    name: veracode-security-results  # ✅ Nome sem hífens no meio
-```
+**Por que isso funciona?**
+- A action verifica `ACTIONS_RUNTIME_TOKEN` antes de criar artefatos
+- Setando como string vazia, ela pula a criação automática (que tem bug)
+- Os arquivos JSON são gerados normalmente no workspace
+- Nosso step de upload separado coleta os arquivos com nome válido
 
 **Arquivos gerados:**
 - `results.json` - Resultados completos (gerado pelo Veracode CLI)
@@ -136,6 +137,34 @@ permissions:
 ```
 
 ## 🔍 Problemas com Scans
+
+### ❌ SCA: "We detected that you have uncommitted changes"
+
+**Sintoma:**
+```
+Error: We detected that you have uncommitted changes in your project.
+Please commit your changes or use --allow-dirty option when scanning.
+Scan finished with exit code: 1
+```
+
+**Causa:**
+O GitHub Actions cria arquivos temporários durante a execução do workflow (como cache, logs, etc.). O Veracode SCA detecta esses arquivos como "mudanças não commitadas" e recusa escanear por padrão.
+
+**Solução:** ✅ Corrigido!
+
+O workflow foi atualizado para usar `allow-dirty: true`:
+```yaml
+- name: 🛡️ Veracode SCA Scan
+  uses: veracode/veracode-sca@v2.1.10
+  with:
+    allow-dirty: true  # ✅ Permite scan mesmo com arquivos temporários
+```
+
+**É seguro usar allow-dirty?**
+- ✅ Sim, em pipelines CI/CD é esperado
+- ✅ Não afeta a qualidade do scan
+- ✅ Apenas ignora arquivos não trackeados pelo Git
+- ⚠️ Em desenvolvimento local, prefira commitar antes
 
 ### ⚠️ Scan passa mas não encontra vulnerabilidades
 
@@ -279,6 +308,60 @@ Configure permissões conforme [seção acima](#problemas-com-permissões).
 
 ## 🔐 Problemas com Credenciais
 
+### ❌ SCA: "SRCCLR_API_TOKEN not set"
+
+**Sintoma:**
+```
+Error: SRCCLR_API_TOKEN environment variable not set
+```
+
+**Solução:**
+
+1. **Obtenha o token correto:**
+   - Acesse: https://web.analysiscenter.veracode.com/
+   - Vá em: **Account → Integrations**
+   - Procure por **"Agent-Based Scan"** ou **"SourceClear"**
+   - Você verá opções para diferentes CI/CD:
+     - ✅ **CircleCI** (use este!)
+     - Jenkins
+     - GitHub Actions
+     - Etc.
+   - Copie o valor de `SRCCLR_API_TOKEN` da seção CircleCI
+
+   **⚠️ Importante:** O token é específico por tipo de integração. Use o da seção "CircleCI" ou "GitHub Actions".
+
+2. **Adicione como secret no GitHub:**
+   ```
+   Settings → Secrets → Actions → New repository secret
+   Nome: SRCCLR_API_TOKEN
+   Valor: [cole o token aqui]
+   ```
+
+3. **Verifique no workflow:**
+   ```yaml
+   - name: Veracode SCA Scan
+     env:
+       SRCCLR_API_TOKEN: ${{ secrets.SRCCLR_API_TOKEN }}  # ✅
+     uses: veracode/veracode-sca@v2.1.10
+   ```
+
+**Troubleshooting:**
+
+Se ainda der erro após adicionar o token:
+
+```bash
+# Verifique se o secret foi criado corretamente
+# Vá em: Settings → Secrets and variables → Actions
+# Deve aparecer: SRCCLR_API_TOKEN (com timestamp)
+
+# Se necessário, delete e recrie o secret
+# Às vezes espaços extras causam problemas
+```
+
+**Diferença entre tokens:**
+- `VERACODE_API_ID` + `VERACODE_API_KEY` → Pipeline Scan (SAST)
+- `SRCCLR_API_TOKEN` → SCA (análise de dependências)
+
 ### ❌ Erro: "401 Unauthorized"
 
 **Sintoma:**
@@ -419,5 +502,13 @@ Error: SRCCLR_API_TOKEN environment variable not set
 
 ---
 
-**Última atualização:** 2026-01-26
-**Versão do documento:** 1.1.0
+**Última atualização:** 2026-01-26 (v1.2.0)
+**Versão do documento:** 1.2.0
+
+## 🆕 Atualizações Recentes
+
+**v1.2.0 - 2026-01-26:**
+- ✅ Adicionado workaround para bug das actions do Veracode com nomes de artefatos
+- ✅ Adicionada solução para erro "uncommitted changes" do SCA
+- ✅ Documentação detalhada sobre SRCCLR_API_TOKEN (CircleCI vs GitHub Actions)
+- ✅ Explicação sobre `ACTIONS_RUNTIME_TOKEN: ''` workaround
