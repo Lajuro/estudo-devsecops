@@ -108,12 +108,14 @@ gh secret set SRCCLR_API_TOKEN
 
 ## 📦 Artefatos Gerados
 
-Após cada scan, os seguintes artefatos são salvos:
+Após cada scan, os seguintes artefatos são salvos (nome do artefato: `veracode-security-results`):
 
 | Arquivo | Descrição |
 |---------|-----------|
-| `veracode-pipeline-results.json` | Resultados completos do Pipeline Scan |
-| `veracode-pipeline-filtered.json` | Resultados filtrados (apenas novas issues) |
+| `results.json` | Resultados completos do Pipeline Scan (gerado pelo Veracode) |
+| `filtered_results.json` | Resultados filtrados (apenas novas issues) |
+| `veracode-pipeline-results.json` | Backup dos resultados completos |
+| `veracode-pipeline-filtered.json` | Backup dos resultados filtrados |
 | `veracode-pipeline-summary.txt` | Resumo textual do scan |
 | `scaResults.json` / `scaResults.txt` | Resultados da análise SCA |
 | `app.zip` | Pacote analisado |
@@ -179,6 +181,34 @@ O workflow `Promote to Production` validará o scan anterior antes de permitir o
 - **0.1-3.9** - Baixo
 
 ## 🛠️ Troubleshooting
+
+### Erro: "The artifact name ... is not valid"
+
+**Problema:** O Veracode Pipeline Scan Action falha ao criar artefato com erro sobre nome inválido.
+
+**Causa:** O nome padrão do artefato contém caracteres inválidos (hífens, espaços).
+
+**Solução:** ✅ Já corrigido! O workflow agora usa `artifact_name: veracode-pipeline-scan-results` (sem espaços ou caracteres especiais).
+
+### Erro: "Resource not accessible by integration"
+
+**Problema:** O workflow não consegue criar Pull Request automaticamente.
+
+**Causa:** Token do GitHub sem permissões adequadas.
+
+**Solução:** ✅ Já corrigido! As permissões foram adicionadas ao workflow:
+```yaml
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+```
+
+Se o erro persistir, você pode precisar:
+1. Ir em `Settings → Actions → General`
+2. Em "Workflow permissions", selecione: "Read and write permissions"
+3. Marque: "Allow GitHub Actions to create and approve pull requests"
 
 ### Scan Falhou - "No scan found"
 

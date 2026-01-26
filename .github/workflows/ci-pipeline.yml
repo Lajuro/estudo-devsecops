@@ -5,6 +5,12 @@ env:
   AMBIENTE_ALVO: Producao
   NODE_VERSION: '18'
 
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+
 on:
   push:
     branches: 
@@ -124,6 +130,7 @@ jobs:
           json_output: true
           json_output_file: veracode-pipeline-results.json
           filtered_json_output_file: veracode-pipeline-filtered.json
+          artifact_name: veracode-pipeline-scan-results
         continue-on-error: true
 
       - name: 📊 Relatório Pipeline Scan
@@ -176,11 +183,13 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: veracode-scan-results
+          name: veracode-security-results
           path: |
+            results.json
+            filtered_results.json
+            veracode-pipeline-summary.txt
             veracode-pipeline-results.json
             veracode-pipeline-filtered.json
-            veracode-pipeline-summary.txt
             veracode-artifacts/app.zip
             scaResults.txt
             scaResults.json

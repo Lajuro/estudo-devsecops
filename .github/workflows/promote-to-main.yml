@@ -4,6 +4,12 @@ run-name: ${{ github.actor }} promovendo para produção 🚀
 env:
   NODE_VERSION: '18'
 
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  actions: read
+
 on:
   pull_request:
     types: [opened, synchronize, reopened]
@@ -83,7 +89,7 @@ jobs:
       - name: 📦 Download Artefatos do Scan
         uses: actions/download-artifact@v4
         with:
-          name: veracode-scan-results
+          name: veracode-security-results
           path: ./scan-results
           run-id: ${{ steps.check-scan.outputs.scan-run-id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -107,14 +113,14 @@ jobs:
             exit 0
           fi
           
-          # Analisa resultados do Pipeline Scan
-          if [ -f "./scan-results/veracode-pipeline-filtered.json" ]; then
-            echo "📄 Analisando veracode-pipeline-filtered.json..."
+          # Analisa resultados do Pipeline Scan (arquivo correto: filtered_results.json)
+          if [ -f "./scan-results/filtered_results.json" ]; then
+            echo "📄 Analisando filtered_results.json..."
             
             # Conta issues críticas e altas (simplificado)
             if command -v jq &> /dev/null; then
-              CRITICAL_ISSUES=$(jq '[.findings[] | select(.severity >= 4)] | length' ./scan-results/veracode-pipeline-filtered.json || echo 0)
-              HIGH_ISSUES=$(jq '[.findings[] | select(.severity == 3)] | length' ./scan-results/veracode-pipeline-filtered.json || echo 0)
+              CRITICAL_ISSUES=$(jq '[.findings[] | select(.severity >= 4)] | length' ./scan-results/filtered_results.json || echo 0)
+              HIGH_ISSUES=$(jq '[.findings[] | select(.severity == 3)] | length' ./scan-results/filtered_results.json || echo 0)
             else
               echo "⚠️ jq não disponível, pulando análise detalhada"
             fi

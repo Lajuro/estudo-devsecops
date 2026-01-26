@@ -161,6 +161,14 @@ git push origin feature/nome-da-feature
 
 ## 📝 Changelog
 
+### v2.1.0 - 2026-01-26
+- 🔧 **Corrigido:** Erro de nome inválido no artefato do Veracode Pipeline Scan
+- 🔧 **Corrigido:** Erro de permissões ao criar Pull Request automaticamente
+- ✨ **Adicionado:** Permissões adequadas nos workflows (`contents`, `pull-requests`, `issues`, `actions`)
+- ✨ **Adicionado:** Configuração `artifact_name` no Veracode Pipeline Scan
+- 📝 **Atualizado:** Documentação com guia de troubleshooting completo
+- 📝 **Atualizado:** Nomes de artefatos para seguir convenções do GitHub
+
 ### v2.0.0 - 2026-01-23
 - ✨ Implementado Veracode Pipeline Scan (SAST)
 - ✨ Implementado Veracode SCA
