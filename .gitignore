@@ -1,2 +1,52 @@
+# Git
 .git/
+
+# Node.js
 node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+# Veracode
+veracode-artifacts/
+veracode-pipeline-results.json
+veracode-pipeline-filtered.json
+veracode-pipeline-summary.txt
+scaResults.json
+scaResults.txt
+results.json
+filtered_results.json
+baseline.json
+
+# Security credentials (NEVER COMMIT!)
+secrets.env
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+*-key.txt
+*-token.txt
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+logs/
+*.log
+
+# Build outputs
+dist/
+build/
+*.zip
+*.tar.gz
+
+# Test coverage
+coverage/
+.nyc_output/
